@@ -1,0 +1,11 @@
+[package]
+name = "sensitive"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[package.metadata.packager]
+product-name = "sensitive"
+identifier = "be.sensitive"
+before-packaging-command = "cargo build --release"

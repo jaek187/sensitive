@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            format: nsis
+            platform: windows-x64
+
+          - os: ubuntu-latest
+            format: deb
+            platform: linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust binary
+        run: cargo build --release --locked
+
+      - name: Install packager
+        run: cargo install cargo-packager --locked
+
+      - name: Build installer
+        run: cargo packager --release --formats ${{ matrix.format }}
+
+      - name: Prepare Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          # portable exe
+          Copy-Item `
+            target/release/sensitive.exe `
+            dist/sensitive-windows-x64.exe
+
+          # actual installer
+          $installer = Get-ChildItem target -Recurse -File -Filter "*-setup.exe" |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "Installer not found"
+          }
+
+          Copy-Item $installer.FullName dist/
+
+      - name: Prepare Linux artifacts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # portable elf
+          cp target/release/sensitive \
+            dist/sensitive-linux-x64
+
+          # deb
+          find target -type f -name '*.deb' -exec cp {} dist/ \;
+          ls dist/*.deb >/dev/null
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes
